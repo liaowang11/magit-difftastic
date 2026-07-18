@@ -8,12 +8,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The 'snapshot' Magit channel tracks magit's `main` and is expected to
+    # break occasionally; it runs as an early-warning signal and does not fail
+    # the build.  The 'released' channel (latest Magit on (Non)GNU ELPA) is the
+    # one we commit to supporting and must pass.
+    continue-on-error: ${{ matrix.magit == 'snapshot' }}
     strategy:
       fail-fast: false
       matrix:
         emacs_version:
           - '29.4'
           - '30.1'
+          - snapshot
+        magit:
+          - released
           - snapshot
     steps:
       - uses: actions/checkout@v4
@@ -40,4 +48,9 @@ jobs:
           git --version
 
       - name: Run tests
-        run: eldev -p -dtT test
+        # `--unstable` makes Eldev prefer bleeding-edge archives (MELPA Unstable
+        # / (Non)GNU-devel), pulling Magit's snapshot; without it Eldev resolves
+        # the latest *released* Magit.
+        run: eldev $ELDEV_FLAGS -p -dtT test
+        env:
+          ELDEV_FLAGS: ${{ matrix.magit == 'snapshot' && '--unstable' || '' }}
