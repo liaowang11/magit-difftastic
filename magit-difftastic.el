@@ -1309,7 +1309,7 @@ tab expansion) is skipped rather than mis-highlighted."
 Each RANGE is the (MIN . MAX) line window that side displays (nil to skip it).
 Each side is fetched per CONTEXT's `:old-source'/`:new-source' and content-keyed
 on its blob id (from `magit-difftastic--file-ids') so it is fontified once per
-blob and reused across refreshes (see `magit-difftastic--source-vec')."
+blob with MODE and reused across refreshes (see `magit-difftastic--source-vec')."
   (let ((ids (and magit-difftastic--file-ids
                   (gethash file magit-difftastic--file-ids))))
     (cons (magit-difftastic--source-vec
@@ -1321,8 +1321,9 @@ blob and reused across refreshes (see `magit-difftastic--source-vec')."
 
 (defun magit-difftastic--apply-entries (mode entries old-vec new-vec)
   "Paint ENTRIES from whole-file vectors OLD-VEC/NEW-VEC.
-Falls back to per-chunk reconstruction (limited context) when neither vector is
-available.  ENTRIES are (SIDE NUM CODE-BEG CODE-END) tuples for one chunk."
+Falls back to per-chunk reconstruction with MODE (limited context) when neither
+vector is available.  ENTRIES are (SIDE NUM CODE-BEG CODE-END) tuples for one
+chunk."
   (when entries
     (if (or old-vec new-vec)
         (magit-difftastic--apply-syntax-full entries old-vec new-vec)
@@ -1333,7 +1334,8 @@ available.  ENTRIES are (SIDE NUM CODE-BEG CODE-END) tuples for one chunk."
 
 (defun magit-difftastic--apply-syntax-sections (file context sections)
   "Syntax-highlight every chunk in SECTIONS of FILE in one pass.
-Fetches and fontifies each blob ONCE -- bounded to the deepest line ANY of
+Fetches and fontifies each blob ONCE (via CONTEXT's `:old-source'/`:new-source')
+-- bounded to the deepest line ANY of
 SECTIONS displays (font-lock still scans from the start for correct context) --
 then paints each section from those shared vectors, so a multi-chunk file costs
 one fontification per side rather than one per chunk.  The fontified lines are
@@ -1426,6 +1428,7 @@ The region is clamped to SECTION's body and snapped to whole lines."
 
 (defun magit-difftastic--region-patch (file staged op sel-old sel-new)
   "Build a partial patch for FILE staging only SEL-OLD/SEL-NEW lines, or nil.
+STAGED non-nil diffs the index against HEAD instead of the worktree.
 OP is \"-\" for forward application (stage/discard) or \"+\" for reverse
 \(unstage).  Modeled on `magit-diff-hunk-region-patch'."
   (require 'diff-mode)
@@ -1550,19 +1553,22 @@ worktree to apply a patch to."
 ;; call the original command unchanged.
 
 (defun magit-difftastic--stage-advice (orig &rest args)
-  "Around-advice for `magit-stage' (see commentary)."
+  "Around-advice for `magit-stage'.
+Stage the chunk at point, else call ORIG with ARGS (see commentary)."
   (if-let* ((section (magit-difftastic--current-chunk)))
       (magit-difftastic--stage-chunk-1 section)
     (apply orig args)))
 
 (defun magit-difftastic--unstage-advice (orig &rest args)
-  "Around-advice for `magit-unstage' (see commentary)."
+  "Around-advice for `magit-unstage'.
+Unstage the chunk at point, else call ORIG with ARGS (see commentary)."
   (if-let* ((section (magit-difftastic--current-chunk)))
       (magit-difftastic--unstage-chunk-1 section)
     (apply orig args)))
 
 (defun magit-difftastic--discard-advice (orig &rest args)
-  "Around-advice for `magit-discard'/`magit-delete-thing' (see commentary)."
+  "Around-advice for `magit-discard'/`magit-delete-thing'.
+Discard the chunk at point, else call ORIG with ARGS (see commentary)."
   (if-let* ((section (magit-difftastic--current-chunk)))
       (magit-difftastic--discard-chunk-1 section)
     (apply orig args)))
@@ -1585,13 +1591,15 @@ error."
     (apply orig args)))
 
 (defun magit-difftastic--visit-other-window-advice (orig &rest args)
-  "Like `magit-difftastic--visit-advice', but visiting in another window."
+  "Like `magit-difftastic--visit-advice', but visiting in another window.
+ORIG and ARGS as there."
   (if (magit-difftastic--on-difftastic-section-p)
       (magit-difftastic-visit-file-dwim 'other-window)
     (apply orig args)))
 
 (defun magit-difftastic--visit-other-frame-advice (orig &rest args)
-  "Like `magit-difftastic--visit-advice', but visiting in another frame."
+  "Like `magit-difftastic--visit-advice', but visiting in another frame.
+ORIG and ARGS as there."
   (if (magit-difftastic--on-difftastic-section-p)
       (magit-difftastic-visit-file-dwim 'other-frame)
     (apply orig args)))
