@@ -2,10 +2,10 @@
 
 ;; Copyright (C) 2024 Ryan Schmukler
 
-;; Author: Ryan Schmukler
+;; Author: Ryan Schmukler <rschmukler@gmail.com>
 ;; URL: https://github.com/rschmukler/magit-difftastic
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (magit "3.3.0") (difftastic "0.5.0"))
+;; Package-Requires: ((emacs "28.1") (magit "4.0.0") (difftastic "0.5.0"))
 ;; Keywords: tools, vc, git, diff
 
 ;; This file is not part of GNU Emacs.
