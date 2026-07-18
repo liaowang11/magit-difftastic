@@ -2147,12 +2147,33 @@ When nil, viewing a commit keeps Magit's stock rendering even while
   :group 'magit-difftastic)
 
 ;; These are buffer-local variables Magit sets in its diff/revision buffers;
-;; declare them special to keep the byte-compiler quiet.
+;; declare them special to keep the byte-compiler quiet.  Magit 4.6 renamed two
+;; of them: `magit-buffer-range' -> `magit-buffer-diff-range' (no compatibility
+;; alias) and `magit-buffer-typearg' -> `magit-buffer-diff-typearg'.  We read
+;; whichever the running Magit provides (see the accessors below).
 (defvar magit-buffer-range)
+(defvar magit-buffer-diff-range)
 (defvar magit-buffer-typearg)
+(defvar magit-buffer-diff-typearg)
 (defvar magit-buffer-diff-files)
 (defvar magit-buffer-diff-args)
 (defvar magit-buffer-revision)
+
+(defun magit-difftastic--buffer-diff-range ()
+  "Return the current diff buffer's range.
+Reads `magit-buffer-diff-range' (Magit 4.6+), falling back to
+`magit-buffer-range' on older Magit."
+  (if (boundp 'magit-buffer-diff-range)
+      magit-buffer-diff-range
+    (bound-and-true-p magit-buffer-range)))
+
+(defun magit-difftastic--buffer-diff-typearg ()
+  "Return the current diff buffer's type argument.
+Reads `magit-buffer-diff-typearg' (Magit 4.6+), falling back to
+`magit-buffer-typearg' on older Magit."
+  (if (boundp 'magit-buffer-diff-typearg)
+      magit-buffer-diff-typearg
+    (bound-and-true-p magit-buffer-typearg)))
 
 (defun magit-difftastic--git-lines (&rest args)
   "Run \"git ARGS...\" and return its non-empty output lines as a list."
@@ -2231,8 +2252,8 @@ The diff is classified from Magit's buffer-locals: with no range, `--cached'
 means the index against HEAD (unstaging a chunk is meaningful) and no typearg
 means the worktree against the index (staging a chunk is meaningful); anything
 that names a range/revision is rendered display-only."
-  (let ((range magit-buffer-range)
-        (typearg magit-buffer-typearg)
+  (let ((range (magit-difftastic--buffer-diff-range))
+        (typearg (magit-difftastic--buffer-diff-typearg))
         (diff-files magit-buffer-diff-files))
     (unless (equal typearg "--no-index")
       (let* ((selector (append (and range (list range))

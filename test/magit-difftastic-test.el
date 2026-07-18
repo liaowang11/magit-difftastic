@@ -26,6 +26,29 @@
 (require 'cl-lib)
 (require 'magit-difftastic)
 
+;; Magit 4.6 renamed two diff buffer-locals (`magit-buffer-range' ->
+;; `magit-buffer-diff-range', `magit-buffer-typearg' ->
+;; `magit-buffer-diff-typearg').  Declare both spellings special so the tests
+;; can dynamically bind whichever the running Magit reads (see
+;; `dst-test--let-diff-locals').
+(defvar magit-buffer-range)
+(defvar magit-buffer-diff-range)
+(defvar magit-buffer-typearg)
+(defvar magit-buffer-diff-typearg)
+(defvar magit-buffer-diff-files)
+
+(defmacro dst-test--let-diff-locals (range typearg diff-files &rest body)
+  "Bind Magit's diff buffer-locals around BODY, for pre- and post-4.6 Magit.
+RANGE, TYPEARG and DIFF-FILES are bound to both the old and the 4.6 names, so
+`magit-difftastic--diff-context' sees them whichever Magit is installed."
+  (declare (indent 3) (debug (form form form body)))
+  `(let ((magit-buffer-range ,range)
+         (magit-buffer-diff-range ,range)
+         (magit-buffer-typearg ,typearg)
+         (magit-buffer-diff-typearg ,typearg)
+         (magit-buffer-diff-files ,diff-files))
+     ,@body))
+
 ;;;; Fixtures --------------------------------------------------------------
 
 (defconst dst-test--old
@@ -488,9 +511,7 @@ stage against."
     ;; A second commit, so HEAD~1..HEAD is a real two-revision range.
     (dst-test--write "sample.txt" "alpha\nBRAVO\ncharlie\ndelta\n")
     (dst-test--git "commit" "-aqm" "two")
-    (let ((magit-buffer-range "HEAD~1..HEAD")
-          (magit-buffer-typearg nil)
-          (magit-buffer-diff-files nil))
+    (dst-test--let-diff-locals "HEAD~1..HEAD" nil nil
       (let* ((result (magit-difftastic--diff-context))
              (context (car result))
              (files (cdr result)))
@@ -511,9 +532,7 @@ display-only, comparing the revision's blob against the worktree."
   (skip-unless dst-test--have-tools)
   (dst-test--with-repo '(("sample.txt" . "alpha\nbravo\ncharlie\n"))
       '(("sample.txt" . "alpha\nBRAVO\ncharlie\ndelta\n"))
-    (let ((magit-buffer-range "HEAD")
-          (magit-buffer-typearg nil)
-          (magit-buffer-diff-files nil))
+    (dst-test--let-diff-locals "HEAD" nil nil
       (let* ((result (magit-difftastic--diff-context))
              (context (car result)))
         (should result)
@@ -680,9 +699,7 @@ the whitespace flags are now forwarded."
         ("ws.txt"   . "one\ntwo\n"))
       '(("real.txt" . "alpha\nBRAVO\n")
         ("ws.txt"   . "one  \n  two\n"))
-    (let ((magit-buffer-range nil)
-          (magit-buffer-typearg nil)
-          (magit-buffer-diff-files nil))
+    (dst-test--let-diff-locals nil nil nil
       ;; No whitespace flag: both files render.
       (let* ((magit-buffer-diff-args '("--stat"))
              (files (cdr (magit-difftastic--diff-context))))
