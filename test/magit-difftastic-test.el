@@ -858,6 +858,66 @@ a sentinel that the surrounding `magit-refresh' may never schedule."
                            (magit-difftastic--render-raw
                             f magit-difftastic--diff-base width)))))))))
 
+(ert-deftest magit-difftastic-integration/render-files-waits-with-quit-enabled ()
+  "`--render-files' waits for its renders with quitting enabled.
+Emacs runs `post-command-hook' and timer functions with `inhibit-quit' bound to
+t, and commands dispatched from there (an `embark-act' action opening
+`magit-status', say) reach the wait loop with quitting inhibited.  An untimed
+`accept-process-output' is then uninterruptible: a wedged difft would freeze
+Emacs with no `C-g'.  The wait must therefore rebind `inhibit-quit' to nil."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo '(("a.txt" . "alpha\nbravo\n")
+                         ("b.txt" . "one\ntwo\n"))
+      '(("a.txt" . "alpha\nBRAVO\n")
+        ("b.txt" . "ONE\ntwo\n"))
+    (let* ((files '("a.txt" "b.txt"))
+           (width (magit-difftastic--width))
+           (jobs (mapcar (lambda (f) (cons f magit-difftastic--diff-base)) files))
+           (observed 'unset)
+           (real (symbol-function 'accept-process-output)))
+      ;; Capture `inhibit-quit' as seen from inside the wait, entered the way
+      ;; `post-command-hook' enters it.
+      (cl-letf (((symbol-function 'accept-process-output)
+                 (lambda (&rest args)
+                   (when (eq observed 'unset)
+                     (setq observed inhibit-quit))
+                   (apply real args))))
+        (let ((inhibit-quit t))
+          (magit-difftastic--render-files jobs width)))
+      (should (eq observed nil)))))
+
+(ert-deftest magit-difftastic-integration/render-files-quit-reaps-renders ()
+  "Quitting the wait leaves no render process or render buffer behind.
+Now that the wait is quittable, `C-g' throws out of `--render-files' with jobs
+still in flight; those processes and their output buffers must be cleaned up
+rather than leaked into the session."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo '(("a.txt" . "alpha\nbravo\n")
+                         ("b.txt" . "one\ntwo\n"))
+      '(("a.txt" . "alpha\nBRAVO\n")
+        ("b.txt" . "ONE\ntwo\n"))
+    (let* ((files '("a.txt" "b.txt"))
+           (width (magit-difftastic--width))
+           (jobs (mapcar (lambda (f) (cons f magit-difftastic--diff-base)) files))
+           (quit-seen nil))
+      ;; Quit on the first wait, i.e. with every launched render still running.
+      (cl-letf (((symbol-function 'accept-process-output)
+                 (lambda (&rest _) (signal 'quit nil))))
+        (condition-case nil
+            (magit-difftastic--render-files jobs width)
+          (quit (setq quit-seen t))))
+      (should quit-seen)
+      (should-not (cl-find-if
+                   (lambda (proc)
+                     (string-prefix-p "magit-difftastic-render"
+                                      (process-name proc)))
+                   (process-list)))
+      (should-not (cl-find-if
+                   (lambda (buf)
+                     (string-prefix-p " *magit-difftastic-render"
+                                      (buffer-name buf)))
+                   (buffer-list))))))
+
 ;;;; Unit tests: render cache ----------------------------------------------
 
 (ert-deftest magit-difftastic--cache-key/direct-and-nil ()

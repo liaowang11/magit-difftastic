@@ -393,13 +393,29 @@ a synchronous render."
       ;; and complete (no truncated buffer).  `magit-inhibit-refresh' still
       ;; neutralises any foreign sentinel/timer that re-enters `magit-refresh'
       ;; during the wait -- the reentrancy freeze of #6.
+      ;;
+      ;; Wait with quitting *enabled*.  Emacs runs `post-command-hook' and timer
+      ;; functions with `inhibit-quit' bound to t, so a command dispatched from
+      ;; there (an `embark-act' action opening `magit-status', say) reaches this
+      ;; loop with quitting inhibited, where an untimed `accept-process-output'
+      ;; cannot be interrupted at all: a wedged difft would freeze Emacs with no
+      ;; `C-g'.  Rebinding `inhibit-quit' restores that escape hatch; the
+      ;; `unwind-protect' then reaps whatever is still in flight when the user
+      ;; does quit, so no render process or output buffer leaks into the session.
       (let ((magit-inhibit-refresh t))
-        (while active
-          (let ((proc (caar active)))
-            (while (accept-process-output proc))
-            (collect proc)
-            ;; A finished slot frees room for the next queued job.
-            (launch)))))
+        (unwind-protect
+            (let ((inhibit-quit nil))
+              (while active
+                (let ((proc (caar active)))
+                  (while (accept-process-output proc))
+                  (collect proc)
+                  ;; A finished slot frees room for the next queued job.
+                  (launch))))
+          (dolist (entry active)
+            (let ((buf (process-buffer (car entry))))
+              (delete-process (car entry))
+              (when (buffer-live-p buf)
+                (kill-buffer buf)))))))
     results))
 
 ;;; Render cache
