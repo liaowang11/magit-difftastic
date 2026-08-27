@@ -152,6 +152,7 @@ Evil is absent, this is skipped entirely — no hard dependency.
 | `magit-difftastic-cache`                | `t`          | Cache rendered difft output across refreshes, keyed on the compared blobs (plus display and width), so unchanged files are not re-rendered. Clear with `magit-difftastic-clear-cache`. |
 | `magit-difftastic-chunk-heading-face`   | `magit-diff-hunk-heading` | Face for the per-chunk `@@ line N @@` headings. Defaults to Magit's hunk-heading face (a full-width bar); set to e.g. `magit-hash` for understated headings. |
 | `magit-difftastic-apply-context`        | `1`          | Context lines for the git hunks used to stage/unstage chunks. Must be `>= 1`. |
+| `magit-difftastic-status-buffers`       | `t`          | Render `magit-status-mode` buffers with difftastic chunks. Set `nil` to keep Magit's stock per-hunk rendering in the status buffer while difftastic still renders the diff and revision buffers; status file sections are inserted collapsed, so this also avoids rendering diffs that are not shown. |
 | `magit-difftastic-diff-buffers`         | `t`          | Render `magit-diff-mode` buffers (including the commit-message preview) with difftastic chunks. |
 | `magit-difftastic-revision-buffers`     | `t`          | Render `magit-revision-mode` buffers (viewing a commit) with difftastic chunks. |
 | `magit-difftastic-toggle-rendering-key` | `"C-c C-d"`  | Key bound on difftastic/stock sections to `magit-difftastic-toggle-file-rendering` (switch the file at point between difftastic and stock Magit rendering). `nil` binds no key. |

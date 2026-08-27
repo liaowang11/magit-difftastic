@@ -552,6 +552,73 @@ renderer relies on the ORIG to drop that stray OLD entry; see
                        "\n" t)))
       (should (member "original.txt" rename-origins)))))
 
+;;;; Integration: status-buffer opt-out ------------------------------------
+
+(defun dst-test--status-section-types (inserter directory)
+  "Return the section types INSERTER produces, in a status buffer for DIRECTORY.
+INSERTER is called the way `magit-status-sections-hook' calls it -- through the
+advised symbol, so `magit-difftastic-mode's advice applies -- inside a root
+`status' section of a `magit-status-mode' buffer.  The returned list is the
+depth-first sequence of section type symbols."
+  (with-temp-buffer
+    (setq default-directory directory)
+    (magit-status-mode)
+    ;; `magit-refresh-buffer' binds this; without it every `magit-toplevel' in
+    ;; the inserters spawns its own git process.
+    (let ((magit--refresh-cache (list (cons 0 0)))
+          (inhibit-read-only t))
+      (magit-insert-section (status)
+        (funcall inserter)))
+    (let (types)
+      (cl-labels ((walk (section)
+                    (push (oref section type) types)
+                    (mapc #'walk (oref section children))))
+        (walk magit-root-section))
+      (nreverse types))))
+
+(defmacro dst-test--with-difftastic-mode (&rest body)
+  "Enable `magit-difftastic-mode' for BODY, restoring its previous state."
+  (declare (indent 0))
+  `(let ((was magit-difftastic-mode))
+     (unwind-protect
+         (progn (magit-difftastic-mode +1) ,@body)
+       (unless was (magit-difftastic-mode -1)))))
+
+(ert-deftest magit-difftastic-integration/status-buffers-default-renders-chunks ()
+  "By default the status buffer's sections are difftastic chunks."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo '(("a.txt" . "alpha\nbravo\n"))
+      '(("a.txt" . "alpha\nBRAVO\n"))
+    (dst-test--git "add" "-A")
+    (dst-test--write "a.txt" "alpha\nBRAVO\ncharlie\n")
+    (let ((dir default-directory))
+      (dst-test--with-difftastic-mode
+        (let ((magit-difftastic-status-buffers t))
+          (dolist (inserter '(magit-insert-unstaged-changes
+                              magit-insert-staged-changes))
+            (let ((types (dst-test--status-section-types inserter dir)))
+              (should (memq 'magit-difftastic-hunk types))
+              (should-not (memq 'hunk types)))))))))
+
+(ert-deftest magit-difftastic-integration/status-buffers-nil-keeps-stock ()
+  "With `magit-difftastic-status-buffers' nil the status buffer stays stock.
+The opt-out covers `magit-status-mode' only; the diff- and revision-buffer
+customs (`magit-difftastic-diff-buffers', `magit-difftastic-revision-buffers')
+stay in charge of those buffers, so difftastic can be scoped to them."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo '(("a.txt" . "alpha\nbravo\n"))
+      '(("a.txt" . "alpha\nBRAVO\n"))
+    (dst-test--git "add" "-A")
+    (dst-test--write "a.txt" "alpha\nBRAVO\ncharlie\n")
+    (let ((dir default-directory))
+      (dst-test--with-difftastic-mode
+        (let ((magit-difftastic-status-buffers nil))
+          (dolist (inserter '(magit-insert-unstaged-changes
+                              magit-insert-staged-changes))
+            (let ((types (dst-test--status-section-types inserter dir)))
+              (should (memq 'hunk types))
+              (should-not (memq 'magit-difftastic-hunk types)))))))))
+
 ;;;; Integration: diff-mode range rendering (issue #1) ---------------------
 
 (ert-deftest magit-difftastic-integration/diff-context-range ()

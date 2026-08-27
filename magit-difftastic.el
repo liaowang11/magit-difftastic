@@ -2120,6 +2120,21 @@ like it expands straight to its diff in Magit."
         :old-source '(blob "HEAD") :new-source '(blob "")
         :staged t :stageable t))
 
+(defcustom magit-difftastic-status-buffers t
+  "Whether to render `magit-status-mode' buffers with difftastic chunks.
+When nil, the status buffer's unstaged and staged sections keep Magit's stock
+per-hunk rendering even while `magit-difftastic-mode' is enabled, so difftastic
+can be scoped to the diff and revision buffers (see
+`magit-difftastic-diff-buffers' and `magit-difftastic-revision-buffers').
+
+Beyond taste, the status buffer is where difftastic costs the most: its file
+sections are inserted collapsed, yet every changed file is rendered up front
+\(see `magit-difftastic--insert-file-sections'), so a slow file is paid for even
+when nothing is shown.  Diff and revision buffers insert their sections
+expanded, so there the rendering is always displayed."
+  :type 'boolean
+  :group 'magit-difftastic)
+
 (defun magit-difftastic-insert-unstaged-changes ()
   "Difftastic replacement for `magit-insert-unstaged-changes'."
   (when-let* ((files (magit-difftastic--drop-whitespace-only
@@ -2142,6 +2157,22 @@ like it expands straight to its diff in Magit."
         (magit-difftastic--insert-file-sections
          files (magit-difftastic--context-staged)))
       (insert "\n"))))
+
+(defun magit-difftastic--insert-unstaged-advice (orig &rest args)
+  "Around-advice for `magit-insert-unstaged-changes'.
+Insert the difftastic unstaged section, or call ORIG with ARGS for Magit's stock
+rendering when `magit-difftastic-status-buffers' is nil."
+  (if magit-difftastic-status-buffers
+      (magit-difftastic-insert-unstaged-changes)
+    (apply orig args)))
+
+(defun magit-difftastic--insert-staged-advice (orig &rest args)
+  "Around-advice for `magit-insert-staged-changes'.
+Insert the difftastic staged section, or call ORIG with ARGS for Magit's stock
+rendering when `magit-difftastic-status-buffers' is nil."
+  (if magit-difftastic-status-buffers
+      (magit-difftastic-insert-staged-changes)
+    (apply orig args)))
 
 (defun magit-difftastic-toggle-file-rendering ()
   "Toggle the file at point between difftastic and stock Magit rendering.
@@ -2494,8 +2525,10 @@ unbound (falling through to Magit), so users who remap `s'/`u'/`x' can opt out."
   "Render unstaged/staged changes in `magit-status' with difftastic.
 
 While enabled, `magit-insert-unstaged-changes' and
-`magit-insert-staged-changes' are overridden so the status buffer shows
-collapsible, difftastic-rendered, per-file sections.  `magit-insert-diff' and
+`magit-insert-staged-changes' are advised so the status buffer shows
+collapsible, difftastic-rendered, per-file sections; set
+`magit-difftastic-status-buffers' to nil to keep Magit's stock rendering there.
+`magit-insert-diff' and
 `magit-insert-revision-diff' are likewise advised so `magit-diff-mode' buffers
 \(including the diff shown while composing a commit) and `magit-revision-mode'
 buffers (viewing a commit) get the same difftastic chunks; this can be scoped
@@ -2515,10 +2548,10 @@ uses Magit's native per-hunk/line staging)."
   :group 'magit-difftastic
   (if magit-difftastic-mode
       (progn
-        (advice-add 'magit-insert-unstaged-changes :override
-                    #'magit-difftastic-insert-unstaged-changes)
-        (advice-add 'magit-insert-staged-changes :override
-                    #'magit-difftastic-insert-staged-changes)
+        (advice-add 'magit-insert-unstaged-changes :around
+                    #'magit-difftastic--insert-unstaged-advice)
+        (advice-add 'magit-insert-staged-changes :around
+                    #'magit-difftastic--insert-staged-advice)
         (advice-add 'magit-insert-diff :around
                     #'magit-difftastic--insert-diff-advice)
         (advice-add 'magit-insert-revision-diff :around
@@ -2530,9 +2563,9 @@ uses Magit's native per-hunk/line staging)."
         (magit-difftastic--set-evil-keys t)
         (magit-difftastic--set-toggle-key t))
     (advice-remove 'magit-insert-unstaged-changes
-                   #'magit-difftastic-insert-unstaged-changes)
+                   #'magit-difftastic--insert-unstaged-advice)
     (advice-remove 'magit-insert-staged-changes
-                   #'magit-difftastic-insert-staged-changes)
+                   #'magit-difftastic--insert-staged-advice)
     (advice-remove 'magit-insert-diff
                    #'magit-difftastic--insert-diff-advice)
     (advice-remove 'magit-insert-revision-diff
