@@ -2835,20 +2835,43 @@ like it expands straight to its diff in Magit."
         :old-source '(blob "HEAD") :new-source '(blob "")
         :staged t :stageable t))
 
+(defcustom magit-difftastic-status-buffers t
+  "Whether to render `magit-status-mode' buffers with difftastic chunks.
+When nil, the status buffer's unstaged and staged sections keep Magit's stock
+per-hunk rendering even while `magit-difftastic-mode' is enabled, so difftastic
+can be scoped to the diff and revision buffers (see
+`magit-difftastic-diff-buffers' and `magit-difftastic-revision-buffers').
+
+Beyond taste, the status buffer is where difftastic costs the most: its file
+sections are inserted collapsed, yet every changed file is still rendered --
+up front with `magit-difftastic-lazy' nil, in the background otherwise -- so a
+slow file costs CPU even when nothing is shown.  Diff and revision buffers
+insert their sections expanded, so there the rendering is always displayed."
+  :type 'boolean
+  :group 'magit-difftastic)
+
 (defun magit-difftastic--stock-default-p ()
   "Return non-nil when the buffer uses stock rendering without overrides."
   (and (eq magit-difftastic-default-rendering 'stock)
        (null magit-difftastic--rendering-overrides)))
 
+(defun magit-difftastic--status-stock-p ()
+  "Return non-nil when a status section should use Magit's own inserter.
+That is so either when the buffer renders stock by default with no overrides
+\(see `magit-difftastic--stock-default-p'), or when difftastic is scoped out of
+status buffers entirely (see `magit-difftastic-status-buffers')."
+  (or (not magit-difftastic-status-buffers)
+      (magit-difftastic--stock-default-p)))
+
 (defun magit-difftastic--insert-unstaged-advice (orig &rest args)
   "Render unstaged changes, calling ORIG with ARGS for stock-only buffers."
-  (if (magit-difftastic--stock-default-p)
+  (if (magit-difftastic--status-stock-p)
       (apply orig args)
     (magit-difftastic-insert-unstaged-changes)))
 
 (defun magit-difftastic--insert-staged-advice (orig &rest args)
   "Render staged changes, calling ORIG with ARGS for stock-only buffers."
-  (if (magit-difftastic--stock-default-p)
+  (if (magit-difftastic--status-stock-p)
       (apply orig args)
     (magit-difftastic-insert-staged-changes)))
 
@@ -3265,8 +3288,10 @@ unbound (falling through to Magit), so users who remap `s'/`u'/`x' can opt out."
   "Render unstaged/staged changes in `magit-status' with difftastic.
 
 While enabled, `magit-insert-unstaged-changes' and
-`magit-insert-staged-changes' are overridden so the status buffer shows
-collapsible, difftastic-rendered, per-file sections.  `magit-insert-diff' and
+`magit-insert-staged-changes' are advised so the status buffer shows
+collapsible, difftastic-rendered, per-file sections; set
+`magit-difftastic-status-buffers' to nil to keep Magit's stock rendering there.
+`magit-insert-diff' and
 `magit-insert-revision-diff' are likewise advised so `magit-diff-mode' buffers
 \(including the diff shown while composing a commit) and `magit-revision-mode'
 buffers (viewing a commit) get the same difftastic chunks; this can be scoped
