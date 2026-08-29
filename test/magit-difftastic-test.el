@@ -294,6 +294,24 @@ A section's keymap replaces Magit's own, so keys bound only there
         (magit-difftastic-width 10))
     (should (= (magit-difftastic--width) 72))))
 
+;;;; Unit tests: context / difft arguments ---------------------------------
+
+(ert-deftest magit-difftastic--context-width/honors-group-binding ()
+  (let ((magit-difftastic--context 4))
+    (should (= (magit-difftastic--context-width) 4))))
+
+(ert-deftest magit-difftastic--context-width/falls-back-to-buffer-args ()
+  "Without a group binding, the buffer's git `-U' width is used."
+  (let ((magit-difftastic--context nil)
+        (magit-buffer-diff-args '("-w" "-U2")))
+    (should (= (magit-difftastic--context-width) 2))))
+
+(ert-deftest magit-difftastic--difft-args/forwards-display-and-context ()
+  (let ((magit-difftastic-display "side-by-side-show-both")
+        (magit-difftastic--context 5))
+    (should (equal (magit-difftastic--difft-args)
+                   '("--display" "side-by-side-show-both" "--context=5")))))
+
 ;;;; Integration: rendering + parsing --------------------------------------
 
 (ert-deftest magit-difftastic-integration/classify-and-parse ()
@@ -502,6 +520,28 @@ code keyed off); the patch must still target the SECOND change."
           (let ((sel (magit-difftastic--region-selected-lines sec)))
             (should (memq 4 (car sel)))
             (should (memq 4 (cdr sel))))))))))
+
+(ert-deftest magit-difftastic-integration/context-flag-resizes-render ()
+  "The buffer's git context width reaches difft as `--context'.
+Git never forwards `-U' to an external diff driver, so magit-difftastic
+must translate it itself; more context renders more rows."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo `(("sample.txt" . "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n"))
+      `(("sample.txt" . "one\ntwo\nthree\nfour\nfive\nSIX\nseven\neight\nnine\nten\neleven\ntwelve\n"))
+    (let* ((magit-difftastic-display "inline")
+           (magit-difftastic-width 160) ; deterministic, no wrapping in batch
+           (magit-difftastic--context nil)
+           (rows (lambda (u)
+                   (let ((magit-buffer-diff-args (list u)))
+                     (length (split-string
+                              (magit-difftastic--render-raw
+                               "sample.txt" magit-difftastic--diff-base
+                               (magit-difftastic--width))
+                              "\n" t))))))
+      (let ((tight (funcall rows "-U1"))
+            (wide (funcall rows "-U6")))
+        (should (> tight 0))
+        (should (> wide tight))))))
 
 ;;;; Integration: file statuses --------------------------------------------
 
@@ -989,10 +1029,17 @@ rather than leaked into the session."
 
 (ert-deftest magit-difftastic--cache-key/direct-and-nil ()
   "A real new blob id is embedded directly; nil ids yield no key."
-  (let ((magit-difftastic-display "inline"))
+  (let ((magit-difftastic-display "inline")
+        (magit-difftastic--context 3))
     (should (equal (magit-difftastic--cache-key "x" '("aaa" . "bbb") 80)
-                   '("inline" 80 "aaa" "bbb"))))
-  (should-not (magit-difftastic--cache-key "x" nil 80)))
+                   '("inline" 80 3 "aaa" "bbb")))
+    ;; The same blobs rendered at another context width must not collide
+    ;; in the cache (pressing +/- in a diff buffer must re-render).
+    (let ((magit-difftastic--context 5))
+      (should-not (equal (magit-difftastic--cache-key "x" '("aaa" . "bbb") 80)
+                         '("inline" 80 3 "aaa" "bbb")))))
+  (let ((magit-difftastic--context 3))
+    (should-not (magit-difftastic--cache-key "x" nil 80))))
 
 (ert-deftest magit-difftastic--all-zero-id-p/detects-placeholder ()
   (should (magit-difftastic--all-zero-id-p "0000000000000000000000000000000000000000"))

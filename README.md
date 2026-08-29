@@ -23,6 +23,9 @@ split into collapsible per-chunk sub-sections with a native-looking
 - **Multi-level staging** — `s` / `u` / `k` work on the whole **file**, a single
   **chunk**, or just the **selected lines**, mapped back onto real git hunks so
   every applied patch is valid.
+- **Context keys work** — `+` / `-` / `=` (`magit-diff-more-context` and
+  friends) resize difftastic sections too: the buffer's git `-U` context width
+  is forwarded to difft, which otherwise ignores it entirely.
 - **Real Magit sections** — files and chunks are genuine sections, so `TAB`,
   navigation, and the rest of Magit work as usual.
 - **Works beyond `magit-status`** — also renders in `magit-diff-mode` (including

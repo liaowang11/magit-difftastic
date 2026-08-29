@@ -273,6 +273,30 @@ appended to this.")
   "Leading git invocation for difftastic `git show' (commit) rendering.
 The revision and the `-- FILE' pathspec are appended to this.")
 
+(defvar magit-difftastic--context nil
+  "Git context width (in lines) for the render group being inserted.
+Bound around one refresh group in `magit-difftastic--insert-file-sections'
+so `magit-diff-get-context' (which may run `git config' for its fallback) is
+called once per group instead of once per file.  Nil outside a group.")
+
+(defun magit-difftastic--context-width ()
+  "Context width in lines the current buffer's diff should display.
+Mirrors the stock magit sections via `magit-diff-get-context' (the `-U'
+argument of `magit-buffer-diff-args', falling back to git's `diff.context'),
+so `magit-diff-more-context' and friends resize difftastic sections too.
+One `git config' call per refresh group is avoided by the group binding
+`magit-difftastic--context' (see `magit-difftastic--insert-file-sections')."
+  (or magit-difftastic--context (magit-diff-get-context)))
+
+(defun magit-difftastic--difft-args ()
+  "Extra arguments for the `difft' external diff driver.
+`--display' per `magit-difftastic-display', plus `--context' forwarding the
+buffer's context width: git never passes `-U' to an external diff driver, so
+without this difftastic sections would ignore `+' / `-'
+(`magit-diff-more-context' / `magit-diff-less-context')."
+  (append (list "--display" magit-difftastic-display)
+          (list (format "--context=%d" (magit-difftastic--context-width)))))
+
 (defvar magit-difftastic--render-cache nil
   "Dynamically-bound hash of FILE -> pre-rendered difft string for one group.
 Bound in `magit-difftastic--insert-file-sections' to the result of rendering
@@ -289,11 +313,11 @@ Synchronous; used as the fallback when no pre-warmed entry exists (see
   (let ((raw (with-temp-buffer
                ;; `difftastic--build-git-process-environment' sets
                ;; GIT_EXTERNAL_DIFF=difft ... so plain `git diff --ext-diff'
-               ;; routes through difftastic.  We append `--display' per
-               ;; `magit-difftastic-display'.
+               ;; routes through difftastic, with `--display' and `--context'
+               ;; per `magit-difftastic--difft-args'.
                (let ((process-environment
                       (difftastic--build-git-process-environment
-                       width (list "--display" magit-difftastic-display))))
+                       width (magit-difftastic--difft-args))))
                  (apply #'process-file "git" nil t nil
                         (append diff-args (list "--" file))))
                (buffer-string))))
@@ -347,7 +371,7 @@ a synchronous render."
          ;; difft is selected purely through the environment (GIT_EXTERNAL_DIFF
          ;; etc.); the same env is reused for every process in the group.
          (env (difftastic--build-git-process-environment
-               width (list "--display" magit-difftastic-display))))
+               width (magit-difftastic--difft-args))))
     (cl-labels
         ((collect (proc)
            ;; PROC has been drained to EOF by the wait loop, so its buffer holds
@@ -421,8 +445,8 @@ a synchronous render."
 ;;; Render cache
 ;;
 ;; difft output for a file is a pure function of the two blobs being compared
-;; plus the display layout and width, so we cache rendered strings across
-;; refreshes keyed on exactly those inputs.  The blobs are identified by their
+;; plus the display layout, width and context, so we cache rendered strings
+;; across refreshes keyed on exactly those inputs.  The blobs are identified by their
 ;; git object ids (read once per group with a single plumbing `--raw' call); a
 ;; worktree side git has not hashed (reported as an all-zero id) is keyed by the
 ;; file's stat (size + mtime) instead.  After a staging action only the touched
@@ -508,9 +532,9 @@ is keyed on the NEW path."
 (defcustom magit-difftastic-cache t
   "Whether to cache rendered difft output across refreshes.
 When non-nil, each file's difft output is cached keyed on the two blobs being
-compared plus the display layout and width, so a refresh that does not change a
-file's content reuses the previous rendering instead of running difft again.
-Clear it manually with `magit-difftastic-clear-cache'."
+compared plus the display layout, width and context width, so a refresh that
+does not change a file's content reuses the previous rendering instead of
+running difft again.  Clear it manually with `magit-difftastic-clear-cache'."
   :type 'boolean
   :group 'magit-difftastic)
 
@@ -554,11 +578,13 @@ Clears both `magit-difftastic--cache' (rendered difft output) and
 
 (defun magit-difftastic--cache-key (file ids width)
   "Return the render-cache key for FILE, or nil when it cannot be keyed.
-IDS is the (OLD-ID . NEW-ID) pair from `magit-difftastic--blob-ids' and WIDTH is
-the column width.  A worktree NEW side (an all-zero id git has not hashed) is
-keyed by the file's stat so edits invalidate the entry; when neither the new id
-nor the stat is available the file cannot be safely cached (returns nil), so it
-is always re-rendered."
+IDS is the (OLD-ID . NEW-ID) pair from `magit-difftastic--blob-ids', WIDTH is
+the column width, and the buffer's context width (`magit-difftastic--context')
+is part of the key so +/- re-renders instead of hitting a stale entry.  A
+worktree NEW side (an all-zero id git has not hashed) is keyed by the file's
+stat so edits invalidate the entry; when neither the new id nor the stat is
+available the file cannot be safely cached (returns nil), so it is always
+re-rendered."
   (when ids
     (let* ((old (car ids))
            (new (cdr ids))
@@ -567,7 +593,8 @@ is always re-rendered."
                           (cons 'stat st))
                       new)))
       (and old new-key
-           (list magit-difftastic-display width old new-key)))))
+           (list magit-difftastic-display width
+                 (magit-difftastic--context-width) old new-key)))))
 
 (defun magit-difftastic--cache-get (key)
   "Return the cached render for KEY, or nil (also nil when KEY or caching is off)."
@@ -2078,6 +2105,10 @@ like it expands straight to its diff in Magit."
                      m)))
          (magit-difftastic--file-ids ids)
          (width (magit-difftastic--width))
+         ;; The context width feeds both the difft arguments and the render
+         ;; cache keys; resolve it once per group (`magit-diff-get-context'
+         ;; may run `git config' for its fallback).
+         (magit-difftastic--context (magit-diff-get-context))
          ;; Pre-warm: resolve every difftastic-rendered file in this group up
          ;; front (stock-rendered files and rename sources are skipped -- the
          ;; former go through `magit--insert-diff', the latter are not shown).
