@@ -515,5 +515,30 @@ Non-nil PARENT-HIDDEN initially collapses the file's parent."
             (should (= (hash-table-count magit-difftastic--async-jobs) 2))
             (should-not launches)))))))
 
+(ert-deftest magit-difftastic-lazy/forwards-context-to-difft ()
+  "Lazy renders pass the buffer's `-U' width to difft and key the cache on it.
+Git never forwards `-U' to an external diff driver, so the lazy request's
+environment must carry `--context' itself; a different width must yield a
+different cache key so `+'/`-' re-render instead of reusing stale output."
+  (dst-lazy-test--fixture
+    (let (keys)
+      (dolist (width '(7 2))
+        (setq-local magit-buffer-diff-args (list (format "-U%d" width)))
+        (setq requests nil)
+        (let ((inhibit-read-only t))
+          (erase-buffer))
+        (let* ((request (dst-lazy-test--tree))
+               (env (mapconcat #'identity
+                               (magit-difftastic--lazy-file-env request) "\n")))
+          (should (string-match-p
+                   (format "GIT_EXTERNAL_DIFF=difft .*--context\\\\?=%d\\b" width)
+                   env))
+          ;; The scheduled job runs with that same environment.
+          (should (equal (nth 3 (car requests))
+                         (magit-difftastic--lazy-file-env request)))
+          (push (magit-difftastic--lazy-file-key request) keys)))
+      (should (car keys))
+      (should-not (equal (car keys) (cadr keys))))))
+
 (provide 'magit-difftastic-lazy-test)
 ;;; magit-difftastic-lazy-test.el ends here
