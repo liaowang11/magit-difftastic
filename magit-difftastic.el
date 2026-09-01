@@ -1965,9 +1965,10 @@ two-column, so alignment is skipped."
 
 (defun magit-difftastic--align-chunk-lines (body-lines target)
   "Return BODY-LINES padded so the right column starts at display column TARGET.
-Two-column rows get plain spaces inserted just before their right gutter so its
-display column becomes TARGET; the left column and all text properties are
-preserved.  Single-column chunks (no right column) are returned unchanged."
+Two-column rows get plain spaces inserted before the right gutter's leading
+separator so the whole right column moves intact to TARGET; the left column and
+all existing text properties are preserved.  Single-column chunks (no right
+column) are returned unchanged."
   (if (not body-lines)
       body-lines
     (with-temp-buffer
@@ -1992,9 +1993,21 @@ preserved.  Single-column chunks (no right column) are returned unchanged."
                 ;; Pad back-to-front so an earlier row's parsed positions stay
                 ;; valid after a later row is widened.
                 (dolist (row (reverse rows))
-                  (save-excursion
-                    (goto-char (cadr (nth 2 row)))
-                    (insert (make-string pad ?\s))))))
+                  (pcase-let ((`((,bol ,_eol) ,_left ,right) row))
+                    (let* ((rbeg (cadr right))
+                           ;; difftastic.el's side-by-side parser finds the right
+                           ;; line number inside a gutter that begins with one
+                           ;; separator space.  Insert before that separator so
+                           ;; its ANSI face and the rest of the right column move
+                           ;; together.  Fall back to RBEG if parser output ever
+                           ;; lacks the documented separator.
+                           (unit-beg (if (and (> rbeg bol)
+                                              (eq (char-before rbeg) ?\s))
+                                         (1- rbeg)
+                                       rbeg)))
+                      (save-excursion
+                        (goto-char unit-beg)
+                        (insert (make-string pad ?\s))))))))
             ;; Extract the (now padded) body lines back out, properties intact.
             (let (out)
               (goto-char body-start)
