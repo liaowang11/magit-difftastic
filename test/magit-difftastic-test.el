@@ -704,6 +704,72 @@ display-only, comparing the revision's blob against the worktree."
 
 ;;;; Integration: cross-chunk column alignment (issue #2) -------------------
 
+(defun dst-test--mark-right-separators (body-lines)
+  "Return BODY-LINES with every parsed right-gutter separator marked.
+The sentinel property is independent of difft's colour choices, so alignment
+tests can prove that the whole right column moves intact instead of recognising
+one particular ANSI face or row kind."
+  (with-temp-buffer
+    (insert "@@ @@\n")
+    (let ((body-start (point)))
+      (dolist (line body-lines) (insert line "\n"))
+      (dolist (row (magit-difftastic--parse-chunk-bounds
+                    (point-min) (point-max)))
+        (pcase-let ((`((,bol ,_eol) ,_left ,right) row))
+          (when-let* ((rbeg (and right (cadr right))))
+            ;; difftastic.el parses the right gutter from a regexp whose outer
+            ;; group starts with this one-space column separator.
+            (should (> rbeg bol))
+            (should (eq (char-before rbeg) ?\s))
+            (put-text-property (1- rbeg) rbeg
+                               'dst-test-right-separator t))))
+      (let (out)
+        (goto-char body-start)
+        (dotimes (_ (length body-lines))
+          (push (buffer-substring (point) (line-end-position)) out)
+          (forward-line))
+        (nreverse out)))))
+
+(defun dst-test--right-column-parts (body-lines)
+  "Return each parsed row's left prefix, right unit and right display column.
+The right unit starts at the gutter's leading separator, not at its number, and
+therefore includes every character and text property that alignment must move."
+  (with-temp-buffer
+    (insert "@@ @@\n")
+    (dolist (line body-lines) (insert line "\n"))
+    (delq nil
+          (mapcar
+           (pcase-lambda (`((,bol ,eol) ,_left ,right))
+             (when-let* ((rbeg (and right (cadr right))))
+               (let ((unit-beg (1- rbeg)))
+                 (list :prefix (buffer-substring bol unit-beg)
+                       :right (buffer-substring unit-beg eol)
+                       :right-col (string-width
+                                   (buffer-substring-no-properties
+                                    bol rbeg))))))
+           (magit-difftastic--parse-chunk-bounds
+            (point-min) (point-max))))))
+
+(defun dst-test--side-by-side-gutter-kinds (body-lines)
+  "Return (LEFT-KIND . RIGHT-KIND) for each parsed row in BODY-LINES.
+Each kind is `number' for a numbered gutter or `placeholder' for dots/spaces."
+  (with-temp-buffer
+    (insert "@@ @@\n")
+    (dolist (line body-lines) (insert line "\n"))
+    (mapcar
+     (pcase-lambda (`(,_beg-end ,left ,right))
+       (cl-labels ((kind (cell)
+                     (and cell
+                          (if (string-match-p
+                               "[0-9]"
+                               (buffer-substring-no-properties
+                                (cadr cell) (caddr cell)))
+                              'number
+                            'placeholder))))
+         (cons (kind left) (kind right))))
+     (magit-difftastic--parse-chunk-bounds
+      (point-min) (point-max)))))
+
 (ert-deftest magit-difftastic-integration/align-columns-aligns-right-col ()
   "Files of different widths get the same right column after alignment.
 Guards GH #2: difft sizes each file's columns to its own longest line, so the
@@ -737,6 +803,65 @@ the same display column."
              (lpad (magit-difftastic--align-chunk-lines lbody target)))
         (should (= target (magit-difftastic--chunk-right-col spad)))
         (should (= target (magit-difftastic--chunk-right-col lpad)))))))
+
+(ert-deftest magit-difftastic-integration/align-columns-moves-right-unit-intact ()
+  "Alignment moves the right gutter, separator, code and properties together.
+Exercise both two-column layouts with context, modification, addition, removal,
+wrapped and wide-character rows.  A sentinel on every gutter separator makes
+the invariant independent of difft's current colour palette."
+  (skip-unless dst-test--have-tools)
+  (skip-unless (fboundp 'difftastic--classify-chunk))
+  (dolist (display '("side-by-side" "side-by-side-show-both"))
+    (dst-test--with-repo
+        '(("sample.txt" .
+           "alpha\nobsolete row\n中文 context\nthe old value has enough words to wrap across display rows repeatedly\nomega\n"))
+        '(("sample.txt" .
+           "alpha\n中文 context\nthe new value has enough words to wrap across display rows repeatedly\ninserted row\nomega\n"))
+      (let ((magit-difftastic-display display)
+            (magit-difftastic-width 64)
+            (saw-two-column nil)
+            (saw-wide-character nil)
+            (gutter-kinds nil))
+        (dolist (body (magit-difftastic--split-chunk-bodies
+                       (magit-difftastic--file-diff-string
+                        "sample.txt" magit-difftastic--diff-base)))
+          (when-let* ((natural (magit-difftastic--chunk-right-col body)))
+            (setq saw-two-column t)
+            (setq saw-wide-character
+                  (or saw-wide-character
+                      (cl-some (lambda (line) (string-match-p "中文" line)) body)))
+            (setq gutter-kinds
+                  (append (dst-test--side-by-side-gutter-kinds body)
+                          gutter-kinds))
+            (let* ((marked (dst-test--mark-right-separators body))
+                   (before (dst-test--right-column-parts marked))
+                   (target (+ natural 17))
+                   (aligned (magit-difftastic--align-chunk-lines marked target))
+                   (after (dst-test--right-column-parts aligned)))
+              (should (= (length before) (length after)))
+              (cl-mapc
+               (lambda (old new)
+                 (let ((pad (- target (plist-get old :right-col))))
+                   (should (>= pad 0))
+                   (should (= (plist-get new :right-col) target))
+                   (should
+                    (equal-including-properties
+                     (plist-get new :right)
+                     (plist-get old :right)))
+                   (should
+                    (equal-including-properties
+                     (plist-get new :prefix)
+                     (concat (plist-get old :prefix)
+                             (make-string pad ?\s))))))
+               before after))))
+        ;; Keep the fixture honest: every row class this regression promises
+        ;; must actually reach the general right-unit invariant above.
+        (should saw-two-column)
+        (should saw-wide-character)
+        (should (member '(number . number) gutter-kinds))
+        (should (member '(number . placeholder) gutter-kinds))
+        (should (member '(placeholder . number) gutter-kinds))
+        (should (member '(placeholder . placeholder) gutter-kinds))))))
 
 (ert-deftest magit-difftastic-integration/compute-align-col-takes-max ()
   "`--compute-align-col' returns the widest chunk's right column across files."
@@ -802,6 +927,48 @@ still reads the same line numbers and `git apply' stages the right git hunks."
             (should (string-match-p "^\\+BRAVO-changed$" staged))
             (should (string-match-p "^\\+delta-modified$" staged))
             (should (string-match-p "^\\+golf-added$" staged))))))))
+
+(ert-deftest magit-difftastic-integration/align-columns-preserves-hidden-region-staging ()
+  "Aligned, hidden gutters still resolve a selected row for region staging."
+  (skip-unless dst-test--have-tools)
+  (skip-unless (fboundp 'difftastic--classify-chunk))
+  (dst-test--with-repo `(("sample.txt" . ,dst-test--old))
+      `(("sample.txt" . ,dst-test--new))
+    (let* ((magit-difftastic-display "side-by-side-show-both")
+           (magit-difftastic-width 160)
+           (body (car (magit-difftastic--split-chunk-bodies
+                       (magit-difftastic--file-diff-string
+                        "sample.txt" magit-difftastic--diff-base))))
+           (col (magit-difftastic--chunk-right-col body))
+           (aligned (magit-difftastic--align-chunk-lines body (+ col 30))))
+      (with-temp-buffer
+        (insert "@@ line 1 @@\n")
+        (dolist (line aligned) (insert line "\n"))
+        (let* ((content (save-excursion
+                          (goto-char (point-min))
+                          (line-end-position)))
+               (sec (dst-test--make-section
+                     (point-min) content (point-max))))
+          (magit-difftastic--hide-line-numbers (point-min) (point-max))
+          (goto-char (point-min))
+          (search-forward "delta-modified")
+          (dst-test--with-region (line-beginning-position) (line-end-position)
+            (let* ((sel (magit-difftastic--region-selected-lines sec))
+                   (patch (magit-difftastic--region-patch
+                           "sample.txt" nil "-" (car sel) (cdr sel))))
+              (should (memq 4 (cdr sel)))
+              (should patch)
+              (with-temp-buffer
+                (insert patch)
+                (should (eq 0 (call-process-region
+                               (point-min) (point-max) "git" nil nil nil
+                               "apply" "--cached" "-"))))
+              (let ((staged (dst-test--git
+                             "--no-pager" "diff" "--cached" "-U0")))
+                (should (string-match-p "^-delta$" staged))
+                (should (string-match-p "^\\+delta-modified$" staged))
+                (should-not (string-match-p "BRAVO-changed" staged))
+                (should-not (string-match-p "golf-added" staged))))))))))
 
 (ert-deftest magit-difftastic-integration/align-columns-inline-noop ()
   "Alignment is a no-op for the inline (single-column) layout.

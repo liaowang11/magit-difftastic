@@ -1790,9 +1790,10 @@ two-column, so alignment is skipped."
 
 (defun magit-difftastic--align-chunk-lines (body-lines target)
   "Return BODY-LINES padded so the right column starts at display column TARGET.
-Two-column rows get plain spaces inserted just before their right gutter so its
-display column becomes TARGET; the left column and all text properties are
-preserved.  Single-column chunks (no right column) are returned unchanged."
+Two-column rows get plain spaces inserted before the right gutter's leading
+separator so the whole right column moves intact to TARGET; the left column and
+all existing text properties are preserved.  Single-column chunks (no right
+column) are returned unchanged."
   (if (not body-lines)
       body-lines
     (with-temp-buffer
@@ -1810,10 +1811,20 @@ preserved.  Single-column chunks (no right column) are returned unchanged."
                   (let* ((rbeg (cadr right))
                          (cur (string-width
                                (buffer-substring-no-properties bol rbeg)))
-                         (pad (- target cur)))
+                         (pad (- target cur))
+                         ;; difftastic.el's side-by-side parser finds the right
+                         ;; line number inside a gutter that begins with one
+                         ;; separator space.  Insert before that separator so
+                         ;; its ANSI face and the rest of the right column move
+                         ;; together.  Fall back to RBEG if parser output ever
+                         ;; lacks the documented separator.
+                         (unit-beg (if (and (> rbeg bol)
+                                            (eq (char-before rbeg) ?\s))
+                                       (1- rbeg)
+                                     rbeg)))
                     (when (> pad 0)
                       (save-excursion
-                        (goto-char rbeg)
+                        (goto-char unit-beg)
                         (insert (make-string pad ?\s))))))))
             ;; Extract the (now padded) body lines back out, properties intact.
             (let (out)
