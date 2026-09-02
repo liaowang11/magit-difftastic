@@ -733,7 +733,10 @@ one particular ANSI face or row kind."
 (defun dst-test--right-column-parts (body-lines)
   "Return each parsed row's left prefix, right unit and right display column.
 The right unit starts at the gutter's leading separator, not at its number, and
-therefore includes every character and text property that alignment must move."
+therefore includes every character and text property that alignment must move.
+The display column is measured at the END of the gutter's line number, the same
+reference `magit-difftastic--chunk-right-col' and alignment use (difft
+right-aligns those numbers, so their start column moves with the digit count)."
   (with-temp-buffer
     (insert "@@ @@\n")
     (dolist (line body-lines) (insert line "\n"))
@@ -746,7 +749,7 @@ therefore includes every character and text property that alignment must move."
                        :right (buffer-substring unit-beg eol)
                        :right-col (string-width
                                    (buffer-substring-no-properties
-                                    bol rbeg))))))
+                                    bol (caddr right)))))))
            (magit-difftastic--parse-chunk-bounds
             (point-min) (point-max))))))
 
@@ -927,6 +930,53 @@ still reads the same line numbers and `git apply' stages the right git hunks."
             (should (string-match-p "^\\+BRAVO-changed$" staged))
             (should (string-match-p "^\\+delta-modified$" staged))
             (should (string-match-p "^\\+golf-added$" staged))))))))
+
+(defconst dst-test--wide-new-file
+  (mapconcat (lambda (n)
+               (if (= n 60) "TARGET-sixty" (format "line-%d" n)))
+             (number-sequence 1 120) "\n")
+  "Content of a brand new 120-line file: its gutter mixes 1-, 2- and 3-digit
+line numbers, so difft right-aligns them at differing start columns.")
+
+(ert-deftest magit-difftastic-integration/align-columns-preserves-mixed-width-line-numbers ()
+  "Aligning a chunk whose gutter mixes 1-, 2- and 3-digit numbers keeps them all.
+difft right-aligns the right-hand gutter, so the numbers' END column is what is
+constant across rows; padding to their START column would left-align them and
+leave the ends ragged, which makes difftastic's parser (it keys the right column
+on that end column) drop every row outside one digit-width group.  A new file is
+where this bites: its single chunk spans line 1 to the end of the file."
+  (skip-unless dst-test--have-tools)
+  (skip-unless (fboundp 'difftastic--classify-chunk))
+  (dst-test--with-repo '(("keep.txt" . "keep\n")) nil
+    (dst-test--write "new.txt" (concat dst-test--wide-new-file "\n"))
+    (dst-test--git "add" "new.txt")
+    (let* ((magit-difftastic-display "side-by-side-show-both")
+           (magit-difftastic-width 160)
+           (bodies (magit-difftastic--split-chunk-bodies
+                    (magit-difftastic--file-diff-string
+                     "new.txt" (append magit-difftastic--diff-base '("--cached")))))
+           (body (car bodies))
+           (col (magit-difftastic--chunk-right-col body))
+           (aligned (magit-difftastic--align-chunk-lines body (+ col 30))))
+      (should (= 1 (length bodies)))
+      (should (= (+ col 30) (magit-difftastic--chunk-right-col aligned)))
+      (with-temp-buffer
+        (insert "@@ line 1 @@\n")
+        (dolist (line aligned) (insert line "\n"))
+        (let* ((sec (dst-test--make-section
+                     (point-min)
+                     (save-excursion (goto-char (point-min)) (line-end-position))
+                     (point-max)))
+               (rows (magit-difftastic--parse-chunk-lines sec)))
+          ;; Every row of a pure-addition chunk shows a new-side number.
+          (should (= (length rows)
+                     (seq-count (lambda (row) (car (nth 2 row))) rows)))
+          (should (equal (number-sequence 1 120)
+                         (cdr (magit-difftastic--chunk-displayed-lines sec))))
+          ;; ... so visiting from a two-digit row lands on that row's line.
+          (goto-char (point-min))
+          (search-forward "TARGET-sixty")
+          (should (equal 60 (magit-difftastic--chunk-visit-line sec))))))))
 
 (ert-deftest magit-difftastic-integration/align-columns-preserves-hidden-region-staging ()
   "Aligned, hidden gutters still resolve a selected row for region staging."

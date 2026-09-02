@@ -1719,11 +1719,17 @@ Difftastic inline rows are prefixed with a right-aligned line number."
 ;; on the original text untouched; the gutters difftastic's parser reads stay at
 ;; a per-chunk-consistent (only wider) column, so chunk/region staging and
 ;; line-number hiding keep working; and the left column is never touched.
+;;
+;; The target column is measured at the END of the right gutter's line number,
+;; because difft right-aligns those numbers: padding to their start column would
+;; shift a `1' row two columns further than a `100' row, and difftastic's parser
+;; -- which locates the right column by that end column -- then stops reading
+;; most of the chunk's line numbers (see `magit-difftastic--chunk-right-col').
 
 (defvar magit-difftastic--align-col nil
   "Dynamically-bound target display column for the right side-by-side column.
 Bound in `magit-difftastic--insert-file-sections' to the widest chunk's
-right-column start across the whole group (see
+right-gutter line-number end column across the whole group (see
 `magit-difftastic--compute-align-col') when `magit-difftastic-align-columns' is
 enabled and a side-by-side layout is in use; each chunk's right column is then
 padded out to this column by `magit-difftastic--align-chunk-lines'.  nil
@@ -1749,11 +1755,17 @@ between them becomes one element (a list of strings), exactly as
     (nreverse bodies)))
 
 (defun magit-difftastic--chunk-right-col (body-lines)
-  "Return the right column's start display-column for chunk BODY-LINES, or nil.
+  "Return the right gutter's line-number end display-column in BODY-LINES, or nil.
 nil when the chunk is single-column (purely additions/removals, or the inline
-layout) or difftastic's parser is unavailable.  The value is measured in
-display columns from the line start and is constant across the chunk's rows;
-the maximum over rows is returned defensively."
+layout) or difftastic's parser is unavailable.
+
+The measurement is taken at the END of the right gutter's line number, not at
+its start: difft right-aligns those numbers, so within a chunk the end column is
+what stays constant while the start column moves with the number's digit count
+\(1 vs 60 vs 100).  Aligning on the end column therefore shifts every row by the
+same amount and keeps difft's right alignment -- which difftastic's parser
+relies on, as it identifies the right column by that same end column.  The
+maximum over rows is returned defensively."
   (when body-lines
     (with-temp-buffer
       ;; difftastic's parsers treat the first line of the bounds as the chunk
@@ -1766,15 +1778,15 @@ the maximum over rows is returned defensively."
                             (mapcar
                              (lambda (row)
                                (pcase-let ((`((,bol ,_eol) ,_left ,right) row))
-                                 (when (and right (cadr right))
+                                 (when (and right (caddr right))
                                    (string-width
                                     (buffer-substring-no-properties
-                                     bol (cadr right))))))
+                                     bol (caddr right))))))
                              (magit-difftastic--parse-chunk-bounds beg end)))))
             (and cols (apply #'max cols))))))))
 
 (defun magit-difftastic--compute-align-col (files)
-  "Return the widest right-column start display-column across FILES, or nil.
+  "Return the widest right-gutter line-number end column across FILES, or nil.
 Reads each file's rendered output from the dynamically-bound
 `magit-difftastic--render-cache' and takes the maximum over every two-column
 chunk (see `magit-difftastic--chunk-right-col').  nil when nothing is
@@ -1789,11 +1801,19 @@ two-column, so alignment is skipped."
     maxc))
 
 (defun magit-difftastic--align-chunk-lines (body-lines target)
-  "Return BODY-LINES padded so the right column starts at display column TARGET.
-Two-column rows get plain spaces inserted before the right gutter's leading
-separator so the whole right column moves intact to TARGET; the left column and
-all existing text properties are preserved.  Single-column chunks (no right
-column) are returned unchanged."
+  "Return BODY-LINES padded so the right gutter's numbers end at column TARGET.
+Two-column rows get plain spaces inserted in the gap before the right gutter, so
+the whole gutter (and the code after it) moves intact to TARGET; the left column
+and all existing text properties are preserved.  Single-column chunks (no right
+column) are returned unchanged.
+
+TARGET is measured at the end of the line number, as
+`magit-difftastic--chunk-right-col' returns it, so every row shifts by the same
+amount and difft's right-aligned gutter stays right-aligned.  Measuring at the
+number's start instead would pad a 1-digit row two columns more than a 3-digit
+one, left-aligning the numbers and leaving their ends ragged -- which stops
+difftastic's parser from recognising the right column at all (see that
+function)."
   (if (not body-lines)
       body-lines
     (with-temp-buffer
@@ -1807,10 +1827,11 @@ column) are returned unchanged."
             ;; valid after a later row is widened.
             (dolist (row (reverse (magit-difftastic--parse-chunk-bounds beg end)))
               (pcase-let ((`((,bol ,_eol) ,_left ,right) row))
-                (when (and right (cadr right))
+                (when (and right (cadr right) (caddr right))
                   (let* ((rbeg (cadr right))
                          (cur (string-width
-                               (buffer-substring-no-properties bol rbeg)))
+                               (buffer-substring-no-properties
+                                bol (caddr right))))
                          (pad (- target cur))
                          ;; difftastic.el's side-by-side parser finds the right
                          ;; line number inside a gutter that begins with one
