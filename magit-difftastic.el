@@ -74,11 +74,11 @@
 ;; staging -- handy when you want fine-grained staging or a file difftastic
 ;; renders awkwardly.  The choice is buffer-local and survives refreshes.
 ;;
-;; Evil integration is optional and installed gracefully: if `evil' is present
-;; the staging keys are bound in the relevant magit maps; if not, nothing is
-;; assumed and the package works with stock Emacs keybindings.  Set
-;; `magit-difftastic-bind-evil-keys' to nil to opt out of those Evil bindings
-;; entirely (e.g. if you remap `s'/`u'/`x' yourself).
+;; No keybindings are installed and no Magit keymap is modified.  Per-chunk
+;; staging is wired by ADVISING the magit commands, so it is independent of
+;; which key invokes them: Magit's own `[remap magit-stage-files] -> magit-stage'
+;; entries in its section keymaps route `s'/`u'/`x' into the advised commands,
+;; under `evil-collection-magit' and under stock Emacs bindings alike.
 ;;
 ;; This package: per-file difftastic sections, split into collapsible per-chunk
 ;; sub-sections, with both FILE-LEVEL and PER-CHUNK staging.
@@ -110,11 +110,9 @@
 ;;   Magit's real `hunk' type: real hunk sections trigger Magit's hunk paint
 ;;   method, which repaints lines by +/- detection and would clobber
 ;;   difftastic's colours.  Because the custom type is not one Magit's apply
-;;   machinery understands -- and because evil-collection-magit makes
-;;   `magit-mode-map' an overriding map so a section-keymap `[remap ...]' never
-;;   wins -- per-chunk commands are wired by ADVISING the magit commands
-;;   themselves (see the "Advice" commentary below), which is binding- and
-;;   evil-state-agnostic.
+;;   machinery understands, per-chunk commands are wired by ADVISING the magit
+;;   commands themselves (see the "Advice" commentary below), which is binding-
+;;   and evil-state-agnostic.
 ;;
 ;; KNOWN LIMITATIONS:
 ;;   - Region staging operates within a single chunk at a time (the chunk at
@@ -1609,15 +1607,21 @@ worktree to apply a patch to."
       (magit-difftastic--discard-chunk-1 section)
     (call-interactively #'magit-discard)))
 
-;; Advice -- the robust dispatch mechanism.
+;; Advice -- the only dispatch mechanism.
 ;;
-;; Relying on a `[remap magit-stage]' entry in the section's text-property
-;; keymap does NOT work under evil-collection-magit: it makes `magit-mode-map'
-;; an *overriding* map for the magit evil state, so `s'/`u'/... resolve to the
-;; magit commands through a path that bypasses our remap.  Advising the magit
-;; commands themselves is binding/state agnostic: whatever key (or M-x) invokes
-;; `magit-stage', if point is on a difftastic chunk we handle it, otherwise we
-;; call the original command unchanged.
+;; Advising the magit commands is binding- and state-agnostic: whatever key (or
+;; M-x) invokes `magit-stage', if point is on a difftastic chunk we handle it,
+;; otherwise we call the original command unchanged.  We bind no keys at all.
+;;
+;; The keys reach these commands because Magit already remaps them on a section.
+;; `magit-hunk-section-map' carries `[remap magit-stage-files] -> magit-stage'
+;; (likewise `magit-unstage-files' and `magit-delete-thing'), and
+;; `magit-difftastic-hunk-section-map' inherits it.  A section's text-property
+;; keymap outranks both `emulation-mode-map-alists' (where evil keeps its state
+;; maps) and the local map, so this holds under `evil-collection-magit' -- which
+;; routes `s'/`u' to the file-prompting `magit-stage-files'/`magit-unstage-files'
+;; and `x' to `magit-delete-thing' -- in normal and visual state alike, and with
+;; evil absent entirely.
 
 (defun magit-difftastic--stage-advice (orig &rest args)
   "Around-advice for `magit-stage'.
@@ -1676,8 +1680,8 @@ ORIG and ARGS as there."
   ;; them is transparent.  We intentionally do NOT advise `magit-stage-files'/
   ;; `magit-unstage-files' (what `magit-mode-map' binds `s'/`u' to): their
   ;; interactive forms prompt for files, which would pop a prompt even when we
-  ;; just want to stage the chunk.  Instead the `s'/`u'/`x' keys are bound
-  ;; explicitly per evil state (see `magit-difftastic--set-evil-keys').
+  ;; just want to stage the chunk.  We do not need to: on a section Magit
+  ;; already remaps them onto `magit-stage'/`magit-unstage', which we advise.
   ;;
   ;; The whole `magit-diff-visit-*' family is intercepted: depending on the
   ;; keybinding setup, `RET'/`C-j' on a file heading or chunk can resolve to any
@@ -2484,35 +2488,6 @@ the next time the mode is toggled."
                  (string :tag "Key"))
   :group 'magit-difftastic)
 
-(defcustom magit-difftastic-bind-evil-keys t
-  "Whether to bind the chunk-staging keys in Evil's normal and visual states.
-When non-nil (the default) and `magit-difftastic-mode' is enabled with Evil
-loaded, `s', `u' and `x' are bound in `magit-mode-map' and
-`magit-section-mode-map' (normal and visual states) to the difftastic chunk
-staging commands, so per-chunk and region (line-range) staging work under
-`evil-collection-magit' -- which otherwise routes those keys to the
-file-prompting `magit-stage-files'/`magit-unstage-files'.
-
-Set to nil if you remap these keys yourself and do not want magit-difftastic to
-shadow your bindings.  The staging commands (`magit-difftastic-stage-chunk',
-`magit-difftastic-unstage-chunk', `magit-difftastic-discard-chunk') remain
-available to bind manually; each falls back to the stock Magit command when
-point is not on a difftastic chunk.
-
-This only affects the Evil-state bindings; the command advice that makes the
-stock magit stage/unstage/discard commands chunk-aware is unaffected.  Toggling
-this re-applies immediately while the mode is on (otherwise it takes effect the
-next time `magit-difftastic-mode' is enabled)."
-  :type 'boolean
-  :group 'magit-difftastic
-  :set (lambda (sym val)
-         (set-default sym val)
-         ;; Re-apply right away when the mode is already active, so turning the
-         ;; option off removes our shadowing bindings without a mode toggle.
-         (when (and (bound-and-true-p magit-difftastic-mode)
-                    (fboundp 'magit-difftastic--set-evil-keys))
-           (magit-difftastic--set-evil-keys t))))
-
 (defvar magit-difftastic-hunk-section-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map magit-hunk-section-map)
@@ -2549,40 +2524,6 @@ global Magit binding is shadowed."
         (define-key (symbol-value map) seq
                     (and enable #'magit-difftastic-toggle-file-rendering))))))
 
-(defconst magit-difftastic--evil-keys
-  '(("s" . magit-difftastic-stage-chunk)
-    ("u" . magit-difftastic-unstage-chunk)
-    ("x" . magit-difftastic-discard-chunk))
-  "Evil keys bound in magit maps so chunk/region staging works under evil.")
-
-(defun magit-difftastic--set-evil-keys (enable)
-  "Bind (ENABLE non-nil) or unbind the staging keys in evil normal+visual states.
-Why bind explicitly instead of relying solely on the command advice?  On a
-difftastic chunk the keys `s'/`u' resolve (via `magit-mode-map') to
-`magit-stage-files'/`magit-unstage-files' -- whose interactive forms PROMPT for
-files -- rather than to the dwim commands we advise; and evil-collection routes
-keys differently between states.  Binding `s'/`u'/`x' directly to our commands
-in both normal and visual states makes chunk staging and region (line-range)
-staging behave identically and predictably.  The bound commands fall back to
-the normal magit commands when point is not on a difftastic chunk, so this is
-safe even with the mode's other features off.
-
-We bind in both `magit-mode-map' and `magit-section-mode-map' (the latter has
-higher precedence as a minor-mode map) so our binding wins regardless of what
-evil-collection-magit[-section] puts there.
-
-Binding is gated on `magit-difftastic-bind-evil-keys': we install our commands
-only when ENABLE and that option are both non-nil; otherwise the keys are
-unbound (falling through to Magit), so users who remap `s'/`u'/`x' can opt out."
-  (when (fboundp 'evil-define-key*)
-    (let ((bind (and enable magit-difftastic-bind-evil-keys)))
-      (dolist (map '(magit-mode-map magit-section-mode-map))
-        (when (boundp map)
-          (pcase-dolist (`(,key . ,cmd) magit-difftastic--evil-keys)
-            ;; A nil definition removes our override (falls through to magit's).
-            (evil-define-key* '(normal visual) (symbol-value map)
-                              key (and bind cmd))))))))
-
 ;;;###autoload
 (define-minor-mode magit-difftastic-mode
   "Render unstaged/staged changes in `magit-status' with difftastic.
@@ -2599,9 +2540,10 @@ with `magit-difftastic-diff-buffers' and `magit-difftastic-revision-buffers'.
 The magit stage/unstage/discard/visit commands are advised so that, while point
 is on a difftastic chunk, they act on just that chunk (otherwise unchanged) --
 staging is offered only where it is meaningful (the worktree and `--cached'
-diffs).  Evil normal/visual-state keys are also bound so per-chunk and region
-\(line-range) staging work; set `magit-difftastic-bind-evil-keys' to nil to opt
-out if you remap those keys yourself.
+diffs).  No keys are bound and no Magit keymap is modified: on a section Magit
+already remaps `s'/`u'/`x' onto those advised commands, so per-chunk and region
+\(line-range) staging work under `evil-collection-magit' and stock bindings
+alike.
 
 `magit-difftastic-toggle-rendering-key' is bound on the difftastic and stock
 sections to `magit-difftastic-toggle-file-rendering', which switches the file
@@ -2623,7 +2565,6 @@ uses Magit's native per-hunk/line staging)."
           ;; Some `magit-diff-visit-*' variants may be absent on older Magit.
           (when (fboundp cmd)
             (advice-add cmd :around advice)))
-        (magit-difftastic--set-evil-keys t)
         (magit-difftastic--set-toggle-key t))
     (advice-remove 'magit-insert-unstaged-changes
                    #'magit-difftastic--insert-unstaged-advice)
@@ -2636,7 +2577,6 @@ uses Magit's native per-hunk/line staging)."
     (pcase-dolist (`(,cmd . ,advice) magit-difftastic--advices)
       (when (fboundp cmd)
         (advice-remove cmd advice)))
-    (magit-difftastic--set-evil-keys nil)
     (magit-difftastic--set-toggle-key nil))
   ;; Refresh any visible status/diff/revision buffers so the change is
   ;; immediately visible (`magit-revision-mode' derives from `magit-diff-mode').

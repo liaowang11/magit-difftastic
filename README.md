@@ -39,8 +39,9 @@ split into collapsible per-chunk sub-sections with a native-looking
   highlighting, optional line-number gutters.
 - **Drop-in and reversible** — `magit-difftastic-mode` is a global minor mode;
   turn it off and stock Magit returns.
-- **Optional Evil integration** — staging keys are bound in the magit maps when
-  [Evil][evil] is present, and skipped entirely when it isn't.
+- **No keybindings of its own** — chunk staging is wired by advising the magit
+  commands, so `s` / `u` / `x` work under [`evil-collection-magit`][evil] and
+  stock bindings alike, with no Magit keymap modified.
 
 ## How this differs from difftastic.el
 
@@ -63,7 +64,6 @@ In short: use **difftastic.el** to *view* a diff in its own buffer; use
 - [`magit`](https://github.com/magit/magit) 3.3.0+
 - [`difftastic`][difftastic-el] (the Emacs package) 0.5.0+
 - The [`difft`](https://github.com/Wilfred/difftastic) executable on your `PATH`
-- (optional) [`evil`][evil] for the Vim-style staging keys
 
 ## Installation
 
@@ -135,12 +135,23 @@ These interactive commands are also available for direct binding or `M-x`:
 - `magit-difftastic-discard-chunk`
 - `magit-difftastic-visit-file-dwim`
 
-### Evil integration
+### Evil and evil-collection
 
-If Evil is loaded when the mode is enabled, `s` / `u` / `x` are bound in
-`magit-mode-map` and `magit-section-mode-map` (normal and visual states) so
-chunk and region staging behave predictably under `evil-collection-magit`. If
-Evil is absent, this is skipped entirely — no hard dependency.
+No Evil-specific configuration is needed, and no Magit keymap is modified.
+Chunk staging is keybinding-agnostic because it works at the command level:
+
+1. Magit binds `s` / `u` to `magit-stage-files` / `magit-unstage-files`;
+   `evil-collection-magit` additionally binds `x` to `magit-delete-thing`.
+2. On any Magit section, Magit's own remaps in `magit-hunk-section-map` rewrite
+   those onto `magit-stage` / `magit-unstage` / `magit-discard`, and
+   `magit-difftastic-hunk-section-map` inherits them.
+3. `magit-difftastic-mode` advises those three commands. On a difftastic chunk
+   they act on that chunk, or on the selected lines when a region is active.
+   Anywhere else they behave exactly as stock Magit.
+
+A section's text-property keymap outranks `emulation-mode-map-alists`, where
+Evil keeps its state maps, so this holds in normal and visual state and with
+Evil absent entirely.
 
 ## Configuration
 
@@ -177,7 +188,8 @@ Chunk sub-sections use a custom `magit-difftastic-hunk` section type (not
 Magit's real `hunk` type, which would repaint lines and clobber difftastic's
 colours). Since Magit's apply machinery doesn't understand that type, per-chunk
 commands are wired by *advising* the magit commands — binding- and
-evil-state-agnostic.
+evil-state-agnostic. The package binds no keys and modifies no Magit keymap;
+the keys reach the advised commands through Magit's own section remaps.
 
 ## Known limitations
 

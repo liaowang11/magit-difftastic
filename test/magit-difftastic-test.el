@@ -235,36 +235,6 @@ element is one displayed chunk's body (the header line dropped)."
   (should (equal (magit-difftastic--chunk-start-line '("7 x")) "7"))
   (should-not (magit-difftastic--chunk-start-line '("no numbers" "here"))))
 
-;;;; Unit tests: evil key gating (issue #4) --------------------------------
-
-(ert-deftest magit-difftastic--set-evil-keys/honors-option ()
-  "Evil staging keys are bound only when the mode is on AND the option is set.
-Guards GH #4: `magit-difftastic-bind-evil-keys' must let users opt out of the
-`s'/`u'/`x' bindings; when off (or when disabling), the keys are unbound (nil
-definitions) so they fall through to the user's own bindings."
-  (let (calls)
-    (cl-letf (((symbol-function 'evil-define-key*)
-               (lambda (_states _map key def) (push (cons key def) calls))))
-      ;; mode on + option on -> our staging commands are bound.
-      (setq calls nil)
-      (let ((magit-difftastic-bind-evil-keys t))
-        (magit-difftastic--set-evil-keys t))
-      (should calls)
-      (should (assoc "s" calls))
-      (should (cl-every #'cdr calls))   ; every definition non-nil
-      ;; mode on + option off -> keys unbound (every definition nil).
-      (setq calls nil)
-      (let ((magit-difftastic-bind-evil-keys nil))
-        (magit-difftastic--set-evil-keys t))
-      (should calls)
-      (should-not (cl-some #'cdr calls))
-      ;; mode off -> unbound regardless of the option.
-      (setq calls nil)
-      (let ((magit-difftastic-bind-evil-keys t))
-        (magit-difftastic--set-evil-keys nil))
-      (should calls)
-      (should-not (cl-some #'cdr calls)))))
-
 ;;;; Unit tests: section keymap --------------------------------------------
 
 (ert-deftest magit-difftastic-hunk-section-map/parents-magit-hunk-map ()
@@ -658,6 +628,125 @@ stay in charge of those buffers, so difftastic can be scoped to them."
             (let ((types (dst-test--status-section-types inserter dir)))
               (should (memq 'hunk types))
               (should-not (memq 'magit-difftastic-hunk types)))))))))
+
+;;;; Integration: section keys reach chunk staging (issue #4) ---------------
+;;
+;; The package binds no keys.  `s'/`u'/`k' reach the advised commands because
+;; Magit's own section keymaps remap `magit-stage-files'/`magit-unstage-files'/
+;; `magit-delete-thing' onto `magit-stage'/`magit-unstage'/`magit-discard', and
+;; `magit-difftastic-hunk-section-map' inherits those entries.  These tests pin
+;; that path end to end: resolve the key the way the command loop would, invoke
+;; it, and check what actually reached the index.
+;;
+;; Evil is deliberately not required here.  A section's text-property keymap
+;; outranks `emulation-mode-map-alists', so evil-collection's bindings cannot
+;; reach these keys on a section; that is a property of Magit and evil, not of
+;; this package, and requiring evil-collection in CI is unreliable (it ships
+;; `evil-collection-magit.el' under `modes/magit/', off the `load-path').
+
+(defconst dst-test--two-chunk-old
+  "l01\nl02\nl03\nl04\nl05\nl06\nl07\nl08\nl09\nl10\nl11\nl12\nl13\nl14\nl15\nl16\nl17\nl18\nl19\nl20\n"
+  "Committed content with two widely separated lines to change.")
+
+(defconst dst-test--two-chunk-new
+  "l01\nTOP-CHANGED\nl03\nl04\nl05\nl06\nl07\nl08\nl09\nl10\nl11\nl12\nl13\nl14\nl15\nl16\nl17\nl18\nBOTTOM-CHANGED\nl20\n"
+  "Worktree content: line 2 and line 19 modified, far enough apart to render
+as two separate difftastic chunks.")
+
+(defmacro dst-test--with-status-chunk (directory &rest body)
+  "Run BODY in a difftastic-rendered status buffer for DIRECTORY, point on a chunk.
+The unstaged section is inserted through the advised inserter, then point is
+moved to the first `magit-difftastic-hunk' section."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (setq default-directory ,directory)
+     (magit-status-mode)
+     (setq default-directory ,directory)
+     (let ((magit--refresh-cache (list (cons 0 0)))
+           (inhibit-read-only t))
+       (magit-insert-section (status)
+         (magit-insert-unstaged-changes)))
+     (goto-char (point-min))
+     (while (and (not (eobp)) (not (magit-difftastic--current-chunk)))
+       (forward-char 1))
+     (should (magit-difftastic--current-chunk))
+     ,@body))
+
+(defmacro dst-test--without-refresh (&rest body)
+  "Run BODY with `magit-refresh' stubbed out.
+The staging commands refresh every Magit buffer afterwards, which a synthetic
+status buffer is not set up for."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'magit-refresh) (lambda (&rest _args) nil)))
+     ,@body))
+
+(ert-deftest magit-difftastic-integration/section-keys-resolve-to-advised-commands ()
+  "On a chunk, `s'/`u'/`k' resolve to the Magit commands the mode advises.
+Guards GH #4: this is what makes chunk staging work without binding any key,
+so no Magit keymap has to be touched and other buffer types keep their keys."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo `(("f.txt" . ,dst-test--two-chunk-old))
+      `(("f.txt" . ,dst-test--two-chunk-new))
+    (let ((dir default-directory))
+      (dst-test--with-difftastic-mode
+        (dst-test--with-status-chunk dir
+          ;; The contract is the command remapping, not a key layout: whichever
+          ;; key a setup routes to `magit-stage-files' and friends, on a chunk it
+          ;; lands on the advised command.  Asserted this way the test holds with
+          ;; or without evil-collection, which relocates `k' but not `s'/`u'.
+          (should (eq (command-remapping 'magit-stage-files) 'magit-stage))
+          (should (eq (command-remapping 'magit-unstage-files) 'magit-unstage))
+          (should (eq (command-remapping 'magit-delete-thing) 'magit-discard))
+          ;; Magit binds `s'/`u' to the remapped-from commands in every setup.
+          (should (eq (key-binding "s") 'magit-stage))
+          (should (eq (key-binding "u") 'magit-unstage))
+          ;; And each target is advised, so the resolved key acts on the chunk.
+          (should (advice-member-p #'magit-difftastic--stage-advice 'magit-stage))
+          (should (advice-member-p #'magit-difftastic--unstage-advice 'magit-unstage))
+          (should (advice-member-p #'magit-difftastic--discard-advice
+                                   'magit-discard)))))))
+
+(ert-deftest magit-difftastic-integration/section-key-stages-only-its-chunk ()
+  "Invoking the command `s' resolves to stages just the chunk at point.
+The file carries two changes far enough apart to render as separate chunks;
+only the one under point may reach the index."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo `(("f.txt" . ,dst-test--two-chunk-old))
+      `(("f.txt" . ,dst-test--two-chunk-new))
+    (let ((dir default-directory))
+      (dst-test--with-difftastic-mode
+        (dst-test--with-status-chunk dir
+          (dst-test--without-refresh
+            (call-interactively (key-binding "s")))))
+      (let ((staged (dst-test--git "--no-pager" "diff" "--cached")))
+        (should (string-match-p "^\\+TOP-CHANGED$" staged))
+        (should-not (string-match-p "BOTTOM-CHANGED" staged))))))
+
+(ert-deftest magit-difftastic-integration/section-key-stages-only-the-region ()
+  "With a region inside the chunk, `s' stages only the selected lines.
+Region (line-range) staging is reached through the same advice, so it needs no
+binding of its own."
+  (skip-unless dst-test--have-tools)
+  (dst-test--with-repo `(("sample.txt" . ,dst-test--old))
+      `(("sample.txt" . ,dst-test--new))
+    (let ((dir default-directory)
+          (magit-difftastic-display "inline"))
+      (dst-test--with-difftastic-mode
+        (dst-test--with-status-chunk dir
+          (search-forward "delta-modified")
+          (should (magit-difftastic--current-chunk))
+          (set-mark (line-beginning-position))
+          (goto-char (line-end-position))
+          (activate-mark)
+          (should (magit-difftastic--region-active-p
+                   (magit-difftastic--current-chunk)))
+          (dst-test--without-refresh
+            (call-interactively (key-binding "s")))))
+      (let ((staged (dst-test--git "--no-pager" "diff" "--cached" "-U0")))
+        (should (string-match-p "^\\+delta-modified$" staged))
+        ;; The other two changes in the same file were not selected.
+        (should-not (string-match-p "BRAVO-changed" staged))
+        (should-not (string-match-p "golf-added" staged))))))
 
 ;;;; Integration: diff-mode range rendering (issue #1) ---------------------
 
